@@ -15,7 +15,7 @@ Cost   : 1 per move (default)   or   number of cells travelled (--cost cells)
 Goal   : every gem collected
 
 Algorithms
-  uninformed : bfs, ucs, dfs, dls, ids, ils
+  uninformed : bfs, ucs, dfs
   informed   : astar  (consistent+admissible heuristic: exact maximum set of
                pairwise "non collinear" gems, see GemHeuristic)
 
@@ -23,8 +23,8 @@ Pure standard library (Python >= 3.8).  GUI (optional) lives in inertia_gui.py.
 
 Quick start
   python inertia_solver.py samples/sample_10x8.txt
-  python inertia_solver.py my_save_file.sav --algo bfs,ids,astar
-  python inertia_solver.py --benchmark 10 --size 8x6 --algo bfs,ids,astar
+  python inertia_solver.py my_save_file.sav --algo bfs,dfs,astar
+  python inertia_solver.py --benchmark 10 --size 8x6 --algo bfs,dfs,astar
   python inertia_solver.py --selftest
 """
 from __future__ import annotations
@@ -55,10 +55,9 @@ DIR_NAMES = ["NW", "N", "NE", "W", "E", "SW", "S", "SE"]
 DIR_KEYS = ["7", "8", "9", "4", "6", "1", "2", "3"]      # numeric keypad
 KEY_TO_DIR = {k: i for i, k in enumerate(DIR_KEYS)}
 
-ALL_ALGOS = ["bfs", "ucs", "dfs", "dls", "ids", "ils", "astar"]
+ALL_ALGOS = ["bfs", "ucs", "dfs", "astar"]
 ALGO_TITLES = {
-    "bfs": "BFS", "ucs": "UCS", "dfs": "DFS", "dls": "DLS",
-    "ids": "IDS", "ils": "ILS", "astar": "A*",
+    "bfs": "BFS", "ucs": "UCS", "dfs": "DFS", "astar": "A*",
 }
 
 popcount = int.bit_count if hasattr(int, "bit_count") else (lambda x: bin(x).count("1"))
@@ -572,10 +571,6 @@ class Solver:
         label = ALGO_TITLES[algo]
         if algo == "astar" and weight != 1.0:
             label = f"A*(w={weight:g})"
-        if algo in ("dls",):
-            label = f"DLS(L={depth_limit})"
-        if algo in ("dls", "ids", "ils") and tt:
-            label += "+TT"
         res = Result(algo, label)
         self._reset()
 
@@ -588,8 +583,7 @@ class Solver:
 
         fn = {
             "bfs": self._bfs, "ucs": self._ucs, "dfs": self._dfs,
-            "dls": lambda: self._dls(depth_limit, tt), "ids": lambda: self._ids(tt),
-            "ils": lambda: self._ils(tt), "astar": lambda: self._astar(weight),
+            "astar": lambda: self._astar(weight),
         }[algo]
 
         was = gc.isenabled()
@@ -681,85 +675,6 @@ class Solver:
                     return self._rebuild(parent, ns)
                 stack.append(ns)
         return None
-
-    # -- bounded DFS used by DLS / IDS / ILS --------------------------------
-    def _bounded_dfs(self, limit, use_cost, tt):
-        goal_min = self.goal_min
-        start = self.start
-        states, dirs, gs = [start], [], [0]
-        its = [iter(self._succ(start))]
-        onpath = {start}
-        cutoff, min_exceed = False, None
-        while states:
-            try:
-                d, ns, c = next(its[-1])
-            except StopIteration:
-                onpath.discard(states.pop())
-                its.pop()
-                gs.pop()
-                if dirs:
-                    dirs.pop()
-                continue
-            self.generated += 1
-            if not (self.generated & 4095) and time.perf_counter() > self._deadline:
-                raise LimitExceeded(f"time limit reached ({self.limits.time_limit:g}s)")
-            ng = gs[-1] + (c if use_cost else 1)
-            if ng > limit:
-                cutoff = True
-                if min_exceed is None or ng < min_exceed:
-                    min_exceed = ng
-                continue
-            if ns in onpath:
-                continue
-            if tt is not None:
-                old = tt.get(ns)
-                if old is not None and old <= ng:
-                    continue
-                tt[ns] = ng
-            if ns >= goal_min:
-                return dirs + [d], cutoff, min_exceed
-            self._tick(len(states) + 1 + (len(tt) if tt is not None else 0))
-            states.append(ns)
-            dirs.append(d)
-            gs.append(ng)
-            its.append(iter(self._succ(ns)))
-            onpath.add(ns)
-        return None, cutoff, min_exceed
-
-    def _dls(self, depth_limit, tt):
-        res, cut, _ = self._bounded_dfs(depth_limit, False, {} if tt else None)
-        if res is not None:
-            return res
-        if cut:
-            raise LimitExceeded(f"depth limit {depth_limit} reached without finding a solution (cutoff)")
-        return None
-
-    def _ids(self, tt):
-        limit, it = 0, 0
-        while True:
-            it += 1
-            self.extra["iterations"] = it
-            self.extra["last_depth"] = limit
-            res, cut, _ = self._bounded_dfs(limit, False, {} if tt else None)
-            if res is not None:
-                return res
-            if not cut:
-                return None
-            limit += 1
-
-    def _ils(self, tt):
-        """Iterative lengthening: iterative deepening on PATH COST."""
-        limit, it = 0, 0
-        while True:
-            it += 1
-            self.extra["iterations"] = it
-            self.extra["last_cost_limit"] = limit
-            res, cut, nxt = self._bounded_dfs(limit, self.use_cells, {} if tt else None)
-            if res is not None:
-                return res
-            if not cut:
-                return None
-            limit = nxt
 
     # -- informed: A* ---------------------------------------------------------
     def _astar(self, weight):
@@ -863,8 +778,7 @@ def run_algorithms(puzzle, algos, args):
     lim = Limits(args.time_limit, args.max_nodes, args.max_stored)
     solver = Solver(puzzle, cost=args.cost, limits=lim)
     for a in algos:
-        results.append(solver.solve(a, weight=args.weight, depth_limit=args.depth_limit,
-                                    tt=args.tt, precheck=not args.no_precheck))
+        results.append(solver.solve(a, weight=args.weight, precheck=not args.no_precheck))
     return results
 
 
@@ -926,7 +840,7 @@ def parse_algos(spec):
     for a in algos:
         if a not in ALL_ALGOS:
             raise PuzzleError(f"unknown algorithm '{a}'; choose from {', '.join(ALL_ALGOS)} or 'all'")
-    return algos or ["bfs", "ids", "astar"]
+    return algos or ["bfs", "dfs", "astar"]
 
 
 # --------------------------------------------------------------------------
@@ -1015,31 +929,31 @@ def selftest():
     p = parse_puzzle(f"10x8:{SAMPLE_10x8}")
     lim = Limits(time_limit=20, max_nodes=2_000_000, max_stored=2_000_000)
     s = Solver(p, limits=lim)
-    r = {a: s.solve(a, depth_limit=30, tt=True) for a in ("bfs", "ucs", "ids", "astar", "ils", "dfs")}
+    r = {a: s.solve(a) for a in ("bfs", "ucs", "astar", "dfs")}
     for a, x in r.items():
         print(f"    {x.label:<8} {x.status:<12} moves={x.n_moves} expanded={x.expanded}")
     if all(x.status == "SOLVED" for x in r.values()):
         check(all(x.verified for x in r.values()), "every returned solution passes the independent verifier")
-        opt = {r[a].n_moves for a in ("bfs", "ucs", "ids", "astar", "ils")}
-        check(len(opt) == 1, f"BFS/UCS/IDS/ILS/A* agree on the optimal length ({opt})")
+        opt = {r[a].n_moves for a in ("bfs", "ucs", "astar")}
+        check(len(opt) == 1, f"BFS/UCS/A* agree on the optimal length ({opt})")
     else:
         check(all(x.status != "SOLVED" for x in r.values()), "all algorithms agree the sample has no solution")
 
-    # cells cost: UCS == A* == ILS
+    # cells cost: UCS == A*
     sc = Solver(p, cost="cells", limits=lim)
-    rc = {a: sc.solve(a, tt=True) for a in ("ucs", "astar", "ils")}
+    rc = {a: sc.solve(a) for a in ("ucs", "astar")}
     if all(x.status == "SOLVED" for x in rc.values()):
-        check(len({x.cells for x in rc.values()}) == 1, "UCS/ILS/A* agree on minimal cells-cost")
+        check(len({x.cells for x in rc.values()}) == 1, "UCS/A* agree on minimal cells-cost")
 
     # random puzzles
     ok = True
     for seed in range(5):
         q = generate_puzzle(7, 6, seed)
         sv = Solver(q, limits=lim)
-        a, b, c = sv.solve("bfs"), sv.solve("astar"), sv.solve("ids", tt=True)
+        a, b, c = sv.solve("bfs"), sv.solve("astar"), sv.solve("ucs")
         ok &= (a.status == b.status == c.status == "SOLVED" and a.n_moves == b.n_moves == c.n_moves
                and a.verified and b.verified and c.verified)
-    check(ok, "5 random puzzles: BFS/IDS/A* optimal & verified")
+    check(ok, "5 random puzzles: BFS/UCS/A* optimal & verified")
 
     # verifier catches bad sequences
     check(not verify_solution(p, [0, 0, 0])[0], "verifier rejects an invalid sequence")
@@ -1061,24 +975,22 @@ def build_parser():
         description="Inertia puzzle solver: uninformed search vs A*.  Input = Tatham save file / game id / text grid.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "algorithms: bfs ucs dfs dls ids ils astar | all\n"
+            "algorithms: bfs ucs dfs astar | all\n"
             "moves are printed as numpad digits: 7=NW 8=N 9=NE 4=W 6=E 1=SW 2=S 3=SE\n"
             "(type them in the web game to watch the solution)\n\n"
             "examples:\n"
             "  python inertia_solver.py samples/sample_10x8.txt\n"
-            "  python inertia_solver.py game.sav --algo bfs,ids,astar --time-limit 120 --trace\n"
+            "  python inertia_solver.py game.sav --algo bfs,dfs,astar --time-limit 120 --trace\n"
             "  python inertia_solver.py --benchmark 10 --size 8x6 --csv results.csv\n"
             "  python inertia_solver.py game.sav --check 6236214\n"
             "  python inertia_solver.py --gui"
         ))
     ap.add_argument("file", nargs="?", help="puzzle file ('-' = stdin)")
     ap.add_argument("--size", help="board size WxH (only needed for bare DESC strings of unusual size)")
-    ap.add_argument("--algo", default="bfs,ids,astar", help="comma list or 'all' (default: bfs,ids,astar)")
+    ap.add_argument("--algo", default="bfs,dfs,astar", help="comma list or 'all' (default: bfs,dfs,astar)")
     ap.add_argument("--cost", choices=["moves", "cells"], default="moves",
                     help="path cost: number of moves (default) or cells travelled")
     ap.add_argument("--weight", type=float, default=1.0, help="A* weight (1 = optimal; >1 = faster, not optimal)")
-    ap.add_argument("--depth-limit", type=int, default=25, help="depth limit for DLS (default 25)")
-    ap.add_argument("--tt", action="store_true", help="add a transposition table to DLS/IDS/ILS (more memory, far fewer nodes)")
     ap.add_argument("--time-limit", type=float, default=60.0, help="seconds per algorithm (default 60)")
     ap.add_argument("--max-nodes", type=int, default=5_000_000, help="max expanded nodes per algorithm")
     ap.add_argument("--max-stored", type=int, default=3_000_000, help="max nodes kept in memory per algorithm")
@@ -1132,15 +1044,11 @@ def _main(ap, args):
         return selftest()
     if args.gui:
         try:
-            import inertia_pygame_gui as gui           # preferred: pygame UI (needs: pip install pygame)
-        except ImportError:
-            try:
-                import inertia_gui as gui              # fallback: tkinter UI
-            except ImportError as e:
-                print(f"Cannot start the GUI: {e}\n(pip install pygame   or   Linux: sudo apt install python3-tk)",
-                      file=sys.stderr)
-                return 2
-        return gui.run(args.file)
+            import inertia_gui
+        except ImportError as e:
+            print(f"Cannot start the GUI: {e}\n(Linux: sudo apt install python3-tk)", file=sys.stderr)
+            return 2
+        return inertia_gui.run(args.file)
     if args.sysinfo:
         print(system_info() + "\n")
 
