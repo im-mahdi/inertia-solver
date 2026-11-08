@@ -14,6 +14,7 @@ Agent    : pick an algorithm (BFS UCS DFS DLS IDS ILS A*) and press Solve;
            the solution is replayed on the board with time / node statistics
 Files    : Open / Save buttons, or drag & drop a puzzle file on the window
 """
+import random
 import math
 import queue
 import sys
@@ -260,7 +261,7 @@ class App:
             try:
                 parts = text.replace(",", " ").split()
                 w, h = (int(t) for t in parts[0].lower().split("x"))
-                seed = int(parts[1]) if len(parts) > 1 else 1
+                seed = int(parts[1]) if len(parts) > 1 else random.randrange(1, 10**9)
                 p = generate_puzzle(w, h, seed)
             except (ValueError, IndexError, PuzzleError) as e:
                 self.say(str(e) or "bad input, use e.g.  10x8 5", BAD_RED)
@@ -271,7 +272,7 @@ class App:
             self.stop_all()
             self.rebuild_play()
             self.say(f"Random puzzle {p.game_id()[:46]}")
-        self.modal = {"title": "Random puzzle - size and seed (e.g. 10x8 5)", "text": "10x8 1", "cb": ok}
+        self.modal = {"title": "Random puzzle - size and seed (e.g. 10x8 5)", "text": f"10x8 {random.randrange(1, 10**6)}", "cb": ok}
 
     def cmd_open(self):
         path = None
